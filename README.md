@@ -1,4 +1,4 @@
 # Todo
-1. add expert capacity in gating
+1. add expert capacity in gating -> Done
 2. finish the MoE layer
 

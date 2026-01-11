@@ -18,6 +18,7 @@ class Expert(nn.Module):
 
 
 # we are going to follow Group-level top-2 gating with auxiliary loss
+# https://arxiv.org/pdf/2006.16668
 class Gating(nn.Module):
     def __init__(
         self,
