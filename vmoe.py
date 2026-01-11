@@ -95,6 +95,17 @@ class MoE(nn.Module):
                 input_dim=dim,
                 n_exp=num_experts
                 )
-    def forward(self, x):
-        B, C, d = x.size()
-        num_tokens = (B * C)
+        self.n_experts = num_experts
+    def forward(self, x: torch.Tensor):
+        weights = self.router(x)
+        y = torch.zeros_like(x)
+        for i in range(self.n_experts):
+            mask = weights[:, e] > 0
+            if not mask.any():
+                continue
+            x_e = x[mask]
+            y_e = self.expert(e, x_e)
+            y[mask] += y_e * weights[mask, e].unsqeeze(-1)
+        return y
+
+
