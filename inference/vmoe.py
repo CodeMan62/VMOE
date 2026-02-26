@@ -17,65 +17,18 @@ class Expert(nn.Module):
         return self.W2(F.silu(self.W1))
 
 
-# we are going to follow Group-level top-2 gating with auxiliary loss
-# https://arxiv.org/pdf/2006.16668
-class Gating(nn.Module):
-    def __init__(
-        self,
-        dim,
-        num_experts,
-        capacity_factor_train=1.25,
-        capacity_factor_eval=2.,
-        k=2,
-    ):
+class Router(nn.Module):
+    def __init__(self, num_experts: int, hidden_size: int, top_k: int):
         super().__init__()
-        self.dim = dim
-        self.num_experts = num_experts
-        self.W_g = nn.Linear(dim, num_experts, bias=False)
-        self.capacity_factor_train = capacity_factor_train
-        self.capacity_factor_eval = capacity_factor_eval
-        self.k = k
-
-    def forward(self, x) -> tuple[torch.Tensor, torch.Tensor]:
-        logits = self.W_g(x)
-        S = x.shape[0] # size of x
-        E = self.num_experts
-        gates = F.softmax(logits, dim=-1)
-        mean_gates_per_expert = gates.mean(dim=0)
-        combine_weights = torch.zeros_like(gates)
-        expert_counts = torch.zeros(E, device=x.device)
-        if self.training:
-            capacity_factor = self.capacity_factor_train
-        else:
-            capacity_factor = self.capacity_factor_eval
-        expert_capacity = int(capacity_factor * S / E)
-
-        for s in range(S):
-            g1, e1, g2, e2 = torch.topk(gates, k=self.k, dim=-1)
-            g1 = g1/(g1+g2)
-            e = e1[s]
-            if expert_counts[e] < expert_capacity:
-                combine_weights[s, e] = g1[s]
-                expert_counts[e] += 1
-        for s in range(S):
-            g1, e1, g2, e2 = torch.topk(gates, k=self.k, dim=-1)
-            g2 = g1/(g1+g2)
-            rnd = torch.rand(1, device=x.device).item()
-            e = e2[s]
-            if expert_counts[e] < expert_capacity and rnd < 2 * g2:
-                combine_weights[s, e] = g2[s]
-                expert_counts[e] += 1
-        return combine_weights
-
-
-    def load_balancing_loss(self, expert_probs: torch.Tensor, indices: torch.Tensor):
-        with torch.no_grad():
-            one_hot_indices = F.one_hot(indices, num_classes=self.num_experts)
-            one_hot_indices = torch.sum(one_hot_indices.float(), dim=2)
-            tokens_per_expert = torch.mean(one_hot_indices.float(), dim=(0,1))
-        prob_per_expert = torch.mean(expert_probs.float(), dim=(0,1))
-        loss = torch.sum(prob_per_expert, tokens_per_expert)
-        return loss
+        self.num_experts=num_experts
+        self.top_k = top_k
+        self.gate = nn.Linear(hidden_size, num_experts, bias=False)
+    def forward(self, x):
+        gate_logits = self.gate(x)
+        gate_probs = F.softmax(gate_logits, dim=-1)
+        top_weights, top_indices = torch.topk(gate_probs, self.top_k, dim=-1)
+        top_weights = top_weights / top_weights.sum(dim=-1, keepdim=True)
+        return top_indices, top_weights, gate_probs
 
 
 class MoE(nn.Module):
@@ -86,7 +39,7 @@ class MoE(nn.Module):
                  top_k=2
                  ):
         super().__init__()
-        self.router = Gating(
+        self.router = Router(
                 dim=dim,
                 num_experts=num_experts,
                 k=top_k,
