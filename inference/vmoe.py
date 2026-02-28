@@ -2,63 +2,39 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-# first let's implement a EXPERT
 class Expert(nn.Module):
     def __init__(
         self,
-        input_dim: int,
-        n_exp: int,
+        dim: int,
+        d_ff: int
     ):
         super().__init__()
-        self.W1 = nn.Linear(input_dim, n_exp, bias=False)
-        self.W2 = nn.Linear(n_exp, input_dim, bias=False)
+        self.W1 = nn.Linear(dim, d_ff, bias=False)
+        self.W2 = nn.Linear(d_ff, dim, bias=False)
+        self.W3 = nn.Linear(dim, d_ff)
 
     def forward(self, x) -> torch.Tensor:
-        return self.W2(F.silu(self.W1))
+        return self.W2(F.silu(self.W1(x)) * self.W3(x))
 
-
+# Noisy TOP-K
 class Router(nn.Module):
-    def __init__(self, num_experts: int, hidden_size: int, top_k: int):
+    def __init__(self, d_model, num_experts, top_k):
         super().__init__()
-        self.num_experts=num_experts
         self.top_k = top_k
-        self.gate = nn.Linear(hidden_size, num_experts, bias=False)
+        self.gate = nn.Linear(d_model, num_experts)
+        self.noise_linear = nn.Linear(d_model, num_experts)
     def forward(self, x):
-        gate_logits = self.gate(x)
-        gate_probs = F.softmax(gate_logits, dim=-1)
-        top_weights, top_indices = torch.topk(gate_probs, self.top_k, dim=-1)
-        top_weights = top_weights / top_weights.sum(dim=-1, keepdim=True)
-        return top_indices, top_weights, gate_probs
-
-
-class MoE(nn.Module):
-
-    def __init__(self,
-                 dim,
-                 num_experts=8,
-                 top_k=2
-                 ):
-        super().__init__()
-        self.router = Router(
-                dim=dim,
-                num_experts=num_experts,
-                k=top_k,
-                )
-        self.expert = Expert(
-                input_dim=dim,
-                n_exp=num_experts
-                )
-        self.n_experts = num_experts
-    def forward(self, x: torch.Tensor):
-        weights = self.router(x)
-        y = torch.zeros_like(x)
-        for i in range(self.n_experts):
-            mask = weights[:, e] > 0
-            if not mask.any():
-                continue
-            x_e = x[mask]
-            y_e = self.expert(e, x_e)
-            y[mask] += y_e * weights[mask, e].unsqeeze(-1)
-        return y
+        logits = self.gate(x)
+        if self.training:
+            noise = self.noise_linear(x)
+            noise_std = F.softplus(noise)
+            noisy_logits = logits + (torch.randn_like(logits) * noise_std)
+        else:
+            noisy_logits = logits
+        top_k_logits, indices = torch.topk(noisy_logits, self.top_k, dim=1)
+        zeros = torch.full_like(noisy_logits, float('-inf'))
+        sparse_logits = zeros.scatter(-1, indices, top_k_logits)
+        router_output = F.softmax(sparse_logits, dim=-1)
+        return router_output, indices
 
 
