@@ -52,10 +52,10 @@ class MoE(nn.Module):
                 num_experts=num_experts,
                 top_k=top_k
                 )
-        self.expert = Expert(
+        self.expert = nn.ModuleList([Expert(
                 dim=dim,
                 d_ff=hidden_size
-                )
+                ) for _ in range(num_experts)])
         self.n_experts = num_experts
 
     def forward(self, x):
