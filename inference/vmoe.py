@@ -11,7 +11,7 @@ class Expert(nn.Module):
         super().__init__()
         self.W1 = nn.Linear(dim, d_ff, bias=False)
         self.W2 = nn.Linear(d_ff, dim, bias=False)
-        self.W3 = nn.Linear(dim, d_ff)
+        self.W3 = nn.Linear(dim, d_ff, bias=False)
 
     def forward(self, x) -> torch.Tensor:
         return self.W2(F.silu(self.W1(x)) * self.W3(x))
@@ -23,6 +23,7 @@ class Router(nn.Module):
         self.top_k = top_k
         self.gate = nn.Linear(d_model, num_experts)
         self.noise_linear = nn.Linear(d_model, num_experts)
+
     def forward(self, x):
         logits = self.gate(x)
         if self.training:
@@ -36,5 +37,36 @@ class Router(nn.Module):
         sparse_logits = zeros.scatter(-1, indices, top_k_logits)
         router_output = F.softmax(sparse_logits, dim=-1)
         return router_output, indices
+
+
+class MoE(nn.Module):
+    def __init__(self,
+                 dim,
+                 hidden_size,
+                 num_experts=8,
+                 top_k=2
+                 ):
+        super().__init__()
+        self.router = Router(
+                d_model=dim,
+                num_experts=num_experts,
+                top_k=top_k
+                )
+        self.expert = Expert(
+                dim=dim,
+                d_ff=hidden_size
+                )
+        self.n_experts = num_experts
+
+    def forward(self, x):
+        shape = x.size()
+        x = x.view(-1, self.dim)
+        weights, indices = self.router(x)
+        y = torch.zeros_like(x)
+        for i in range(self.n_experts):
+            expert = self.expert[i]
+            idx, top = torch.where([indices == i])
+            y[idx] += expert(x[idx]) * weights[idx, top, None]
+        return y.view(shape)
 
 
