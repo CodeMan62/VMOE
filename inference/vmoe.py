@@ -13,6 +13,7 @@ class ModelConfig:
     max_seq_len: int = ...
     d_hr: int = ...
     d_rope: int = ...
+    inter_dim: int = ...
 
 
 class RmsNorm(nn.Module):
@@ -139,3 +140,30 @@ class MoE(nn.Module):
             idx, top = torch.where([indices == i])
             y[idx] += expert(x[idx]) * weights[idx, top, None]
         return y.view(shape)
+
+
+class MLP(nn.Module):
+    def __init__(self, dim: int, i_dim: int):
+        super().__init__()
+        self.w1 = nn.Linear(dim, i_dim)
+        self.w2 = nn.Linear(dim, i_dim)
+    def forward(self, x: torch.Tensor):
+        x = self.w1(x)
+        x = F.silu(x)
+        x = self.w2(x)
+        return x
+
+class Block(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.attn = MLA(config)
+        self.attn_norm = RmsNorm(config.d_model)
+        self.ffn_norm = RmsNorm(config.d_model)
+        self.ffn = MLP(config.d_model, config.inter_dim)
+    def forward(self, x: torch.Tensor):
+        x = x + self.attn(self.attn_norm(x))
+        x = x + self.ffn(self.ffn_norm(x))
+        return x
+
+
+
